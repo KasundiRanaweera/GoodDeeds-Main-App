@@ -1,0 +1,272 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function currentUserPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function isOrganizer() {
+      return isSignedIn() &&
+        exists(currentUserPath()) &&
+        (
+          get(currentUserPath()).data.role == 'Organizer' ||
+          get(currentUserPath()).data.isOrganizer == true ||
+          (
+            get(currentUserPath()).data.roles is list &&
+            get(currentUserPath()).data.roles.hasAny(['Organizer'])
+          )
+        );
+    }
+
+    function eventAttendanceOpen(eventData) {
+      return (
+        eventData.eventDate is timestamp &&
+        request.time >= eventData.eventDate &&
+        request.time <= eventData.eventDate + duration.value(2, 'd')
+      ) || (
+        eventData.date is timestamp &&
+        request.time >= eventData.date &&
+        request.time <= eventData.date + duration.value(2, 'd')
+      ) || (
+        eventData.startDate is timestamp &&
+        request.time >= eventData.startDate &&
+        request.time <= eventData.startDate + duration.value(2, 'd')
+      ) || (
+        !(eventData.eventDate is timestamp) &&
+        !(eventData.date is timestamp) &&
+        !(eventData.startDate is timestamp)
+      );
+    }
+
+    function eventDeleteOpen(eventData) {
+      return (
+        eventData.eventDate is timestamp &&
+        request.time < eventData.eventDate - duration.value(12, 'h')
+      ) || (
+        eventData.date is timestamp &&
+        request.time < eventData.date - duration.value(12, 'h')
+      ) || (
+        eventData.startDate is timestamp &&
+        request.time < eventData.startDate - duration.value(12, 'h')
+      ) || (
+        !(eventData.eventDate is timestamp) &&
+        !(eventData.date is timestamp) &&
+        !(eventData.startDate is timestamp)
+      );
+    }
+
+    function pointsFieldChanged() {
+      return request.resource.data.impactPoints != resource.data.impactPoints ||
+        request.resource.data.totalPoints != resource.data.totalPoints ||
+        request.resource.data.rewardPoints != resource.data.rewardPoints ||
+        request.resource.data.points != resource.data.points;
+    }
+
+    function oldPoints() {
+      return (resource.data.impactPoints is int)
+        ? resource.data.impactPoints
+        : ((resource.data.totalPoints is int)
+          ? resource.data.totalPoints
+          : ((resource.data.rewardPoints is int)
+            ? resource.data.rewardPoints
+            : ((resource.data.points is int)
+              ? resource.data.points
+              : 0)));
+    }
+
+    function newPoints() {
+      return (request.resource.data.impactPoints is int)
+        ? request.resource.data.impactPoints
+        : ((request.resource.data.totalPoints is int)
+          ? request.resource.data.totalPoints
+          : ((request.resource.data.rewardPoints is int)
+            ? request.resource.data.rewardPoints
+            : ((request.resource.data.points is int)
+              ? request.resource.data.points
+              : 0)));
+    }
+
+    function arePointFieldsAligned() {
+      return request.resource.data.impactPoints == request.resource.data.totalPoints &&
+        request.resource.data.totalPoints == request.resource.data.rewardPoints &&
+        request.resource.data.rewardPoints == request.resource.data.points;
+    }
+
+    function pointDeltaWithinEventRange() {
+      return (newPoints() - oldPoints()) <= 200 &&
+        (newPoints() - oldPoints()) >= -200 &&
+        newPoints() >= 0;
+    }
+
+    // Allows any signed-in user to update only reward/attendance fields on user docs.
+    function isAttendanceRewardUpdateBySignedInUser() {
+      return isSignedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'impactPoints',
+          'totalPoints',
+          'rewardPoints',
+          'points',
+          'participationStatusByEvent',
+          'attendanceVerifiedAtByEvent',
+          'updatedAt'
+        ]) &&
+        (
+          !pointsFieldChanged() ||
+          (arePointFieldsAligned() && pointDeltaWithinEventRange())
+        );
+    }
+
+    // Allows any signed-in user to create a missing user doc only with attendance/reward fields.
+    function isAttendanceRewardCreateBySignedInUser() {
+      return isSignedIn() &&
+        request.resource.data.keys().hasOnly([
+          'impactPoints',
+          'totalPoints',
+          'rewardPoints',
+          'points',
+          'participationStatusByEvent',
+          'attendanceVerifiedAtByEvent',
+          'updatedAt'
+        ]) &&
+        (
+          !(request.resource.data.impactPoints is int) ||
+          (
+            request.resource.data.totalPoints is int &&
+            request.resource.data.rewardPoints is int &&
+            request.resource.data.points is int &&
+            arePointFieldsAligned() &&
+            request.resource.data.impactPoints >= 0
+          )
+        );
+    }
+
+    match /users/{userId} {
+      // Anyone can read user docs.
+      allow read: if true;
+      allow create, update, delete: if isOrganizer();
+      allow create: if isOwner(userId) || isAttendanceRewardCreateBySignedInUser();
+      allow update: if isOwner(userId) || isAttendanceRewardUpdateBySignedInUser();
+      allow delete: if false;
+    }
+
+    match /user_profiles/{userId} {
+      // Anyone can read user_profile docs.
+      allow read: if true;
+      allow create, update, delete: if isOrganizer();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId);
+      allow delete: if false;
+    }
+
+    match /user_lookup/{userId} {
+      // Anyone can read lightweight lookup docs.
+      allow read: if true;
+      allow create, update: if isOwner(userId) || isOrganizer();
+      allow delete: if false;
+    }
+
+    match /posts/{postId} {
+      // Anyone can read public posts.
+      allow read: if true;
+
+      // Users can create posts for themselves only.
+      allow create: if isSignedIn() &&
+        request.resource.data.keys().hasOnly([
+          'postId',
+          'authorUid',
+          'authorName',
+          'authorBio',
+          'authorPhotoUrl',
+          'description',
+          'imageUrl',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        request.resource.data.authorUid == request.auth.uid &&
+        request.resource.data.postId == postId;
+
+      // Users can update/delete only their own posts.
+      allow update, delete: if isSignedIn() && resource.data.authorUid == request.auth.uid;
+
+      match /likes/{userId} {
+        // Anyone can read likes.
+        allow read: if true;
+
+        // Users can like/unlike only as themselves.
+        allow create: if isOwner(userId) &&
+          request.resource.data.keys().hasOnly(['uid', 'createdAt']) &&
+          request.resource.data.uid == userId;
+        allow update: if false;
+        allow delete: if isOwner(userId);
+      }
+
+      match /comments/{commentId} {
+        // Anyone can read comments.
+        allow read: if true;
+
+        // Users can create comments only as themselves.
+        allow create: if isSignedIn() &&
+          request.resource.data.keys().hasOnly([
+            'commentId',
+            'uid',
+            'authorName',
+            'authorPhotoUrl',
+            'text',
+            'createdAt',
+            'updatedAt'
+          ]) &&
+          request.resource.data.uid == request.auth.uid &&
+          request.resource.data.commentId == commentId;
+
+        // Users can update/delete their own comments only.
+        allow update, delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+      }
+    }
+
+    match /events/{eventId} {
+      // Anyone can read event docs.
+      allow read: if true;
+
+      // Event creation is organizer-only.
+      allow create: if isOrganizer();
+
+      // Organizers have full access to event documents.
+      allow update, delete: if isOrganizer();
+
+      // Volunteers can join/leave events (update only participantIds, participantsCount, updatedAt).
+      allow update: if isSignedIn() && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participantIds', 'participantsCount', 'updatedAt']);
+
+      // Any signed-in user can mark attendance from event date through 2 days after.
+      allow update: if isSignedIn() && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkedInIds', 'awardedParticipantIds', 'updatedAt']) &&
+        eventAttendanceOpen(resource.data);
+
+      // Event owner can fully update/delete their own events.
+      allow update: if isSignedIn() && resource.data.createdByUid == request.auth.uid;
+      allow delete: if isSignedIn() &&
+        (resource.data.createdByUid == request.auth.uid || isOrganizer()) &&
+        eventDeleteOpen(resource.data);
+
+      match /likes/{userId} {
+        // Anyone can read likes.
+        allow read: if true;
+
+        // Users can create/delete only their own like doc with constrained fields.
+        allow create: if isOwner(userId) &&
+          request.resource.data.keys().hasOnly(['uid', 'createdAt']) &&
+          request.resource.data.uid == userId;
+        allow update: if false;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

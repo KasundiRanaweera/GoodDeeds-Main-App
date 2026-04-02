@@ -1,0 +1,49 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "gooddeeds-app-4303c",
+          "appId": "1:173451887290:android:d532c317900f880c8a3883",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "gooddeeds-app-4303c",
+          "configurations": {
+            "android": "1:173451887290:android:d532c317900f880c8a3883",
+            "ios": "1:173451887290:ios:2af2ba61157b658d8a3883",
+            "macos": "1:173451887290:ios:2af2ba61157b658d8a3883",
+            "web": "1:173451887290:web:736bd1a81d240c0a8a3883",
+            "windows": "1:173451887290:web:f2db32e4b71c215c8a3883"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix functions run lint",
+        "npm --prefix functions run build"
+      ]
+    }
+  ]
+}
