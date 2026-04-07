@@ -35,6 +35,8 @@ Each account is restricted to one primary role.
 
 ### Firestore Organizer Validation
 
+Firestore rules validate organizer permissions using role metadata on the signed-in user (`role`, `roles`, or `isOrganizer`) before allowing organizer-only actions.
+
 
 ### Registration Data Writes
 
@@ -99,7 +101,7 @@ Volunteer status progression in My Events:
 - Success feedback is shown after add/delete actions
 
 ### Profile Posts
-.
+
 - Post creation is available via the add-post icon in profile.
 
 ### My Friends and Following
@@ -160,7 +162,7 @@ Volunteer status progression in My Events:
 1. Clone repository:
 
 ```sh
-git clone https://github.com/yourusername/gooddeeds_app.git
+git clone https://github.com/KasundiRanaweera/GoodDeeds-Main-App.git
 cd gooddeeds_app
 ```
 
