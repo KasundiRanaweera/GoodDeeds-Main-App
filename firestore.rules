@@ -276,11 +276,12 @@ service cloud.firestore {
         onlySelfRemoved('checkedInIds') &&
         onlySelfRemoved('awardedParticipantIds');
 
-      // Only the event's own organizer can mark attendance, only for joined volunteers
-      // other than themselves, within the window.
+      // Only the event's own organizer can mark attendance or award points, only for joined
+      // volunteers other than themselves, within the window.
       allow update: if isEventOwner() &&
         changedKeys().hasOnly(['checkedInIds', 'awardedParticipantIds', 'updatedAt']) &&
         idsAfter('checkedInIds').difference(idsBefore('participantIds')).size() == 0 &&
+        idsAfter('awardedParticipantIds').difference(idsBefore('participantIds')).size() == 0 &&
         !idsAfter('checkedInIds').difference(idsBefore('checkedInIds')).hasAny([request.auth.uid]) &&
         eventAttendanceOpen(resource.data);
 
