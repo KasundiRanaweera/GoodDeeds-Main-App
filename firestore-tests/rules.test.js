@@ -89,6 +89,14 @@ test('check-in is rejected after the 48-hour window', async () => {
   await assertFails(checkIn(as('orgA'), 'old', 'vol', 60));
 });
 
+test('organizer cannot award points to someone who never joined', async () => {
+  const db = as('orgA');
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'users/vol2'), { ...points(50), attendanceEventId: 'e1', updatedAt: Timestamp.now() }, { merge: true });
+  batch.update(doc(db, 'events/e1'), { awardedParticipantIds: ['vol2'], updatedAt: Timestamp.now() });
+  await assertFails(batch.commit());
+});
+
 test('organizer cannot check in or award themselves', async () => {
   await assertFails(checkIn(as('orgA'), 'e1', 'orgA', 50));
 });
