@@ -179,17 +179,17 @@ class _ParticipantsScreenState extends State<ParticipantsScreen> {
         }
       }
 
-      // Add participation status and timestamp
-      userUpdates['participationStatusByEvent.$eventId'] = checkedIn
-          ? 'attended'
-          : 'joined';
-      if (checkedIn) {
-        userUpdates['attendanceVerifiedAtByEvent.$eventId'] =
-            FieldValue.serverTimestamp();
-      } else {
-        userUpdates['attendanceVerifiedAtByEvent.$eventId'] =
-            FieldValue.delete();
-      }
+      // Rules use this to check the points change against this event's award.
+      userUpdates['attendanceEventId'] = eventId;
+      // Nested maps, not dotted keys: set() treats dots literally, which the rules reject.
+      userUpdates['participationStatusByEvent'] = {
+        eventId: checkedIn ? 'attended' : 'joined',
+      };
+      userUpdates['attendanceVerifiedAtByEvent'] = {
+        eventId: checkedIn
+            ? FieldValue.serverTimestamp()
+            : FieldValue.delete(),
+      };
       userUpdates['updatedAt'] = FieldValue.serverTimestamp();
 
       // Single atomic update to user document
