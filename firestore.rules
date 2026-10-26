@@ -26,23 +26,21 @@ service cloud.firestore {
         );
     }
 
+    // Attendance can be marked from the event start through 2 days after, by server time.
+    // Events without a timestamp date cannot be checked in.
     function eventAttendanceOpen(eventData) {
       return (
-        eventData.eventDate is timestamp &&
+        eventData.get('eventDate', null) is timestamp &&
         request.time >= eventData.eventDate &&
         request.time <= eventData.eventDate + duration.value(2, 'd')
       ) || (
-        eventData.date is timestamp &&
+        eventData.get('date', null) is timestamp &&
         request.time >= eventData.date &&
         request.time <= eventData.date + duration.value(2, 'd')
       ) || (
-        eventData.startDate is timestamp &&
+        eventData.get('startDate', null) is timestamp &&
         request.time >= eventData.startDate &&
         request.time <= eventData.startDate + duration.value(2, 'd')
-      ) || (
-        !(eventData.eventDate is timestamp) &&
-        !(eventData.date is timestamp) &&
-        !(eventData.startDate is timestamp)
       );
     }
 
@@ -63,35 +61,33 @@ service cloud.firestore {
       );
     }
 
-    function pointsFieldChanged() {
-      return request.resource.data.impactPoints != resource.data.impactPoints ||
-        request.resource.data.totalPoints != resource.data.totalPoints ||
-        request.resource.data.rewardPoints != resource.data.rewardPoints ||
-        request.resource.data.points != resource.data.points;
+    function pointFields() {
+      return ['impactPoints', 'totalPoints', 'rewardPoints', 'points'];
     }
 
-    function oldPoints() {
-      return (resource.data.impactPoints is int)
-        ? resource.data.impactPoints
-        : ((resource.data.totalPoints is int)
-          ? resource.data.totalPoints
-          : ((resource.data.rewardPoints is int)
-            ? resource.data.rewardPoints
-            : ((resource.data.points is int)
-              ? resource.data.points
-              : 0)));
+    // Same fallback order the app uses when reading points.
+    function pointsOf(data) {
+      return data.get('impactPoints',
+        data.get('totalPoints',
+          data.get('rewardPoints',
+            data.get('points', 0))));
     }
 
-    function newPoints() {
-      return (request.resource.data.impactPoints is int)
-        ? request.resource.data.impactPoints
-        : ((request.resource.data.totalPoints is int)
-          ? request.resource.data.totalPoints
-          : ((request.resource.data.rewardPoints is int)
-            ? request.resource.data.rewardPoints
-            : ((request.resource.data.points is int)
-              ? request.resource.data.points
-              : 0)));
+    function eventPointsOf(data) {
+      return data.get('impactPoints', data.get('points', data.get('rewardPoints', 0)));
+    }
+
+    function ownerIdsOf(data) {
+      return [
+        data.get('createdByUid', ''),
+        data.get('organizerId', ''),
+        data.get('userId', ''),
+        data.get('ownerId', '')
+      ];
+    }
+
+    function pointsChangedFrom(beforeData) {
+      return request.resource.data.diff(beforeData).affectedKeys().hasAny(pointFields());
     }
 
     function arePointFieldsAligned() {
@@ -100,76 +96,69 @@ service cloud.firestore {
         request.resource.data.rewardPoints == request.resource.data.points;
     }
 
-    function pointDeltaWithinEventRange() {
-      return (newPoints() - oldPoints()) <= 200 &&
-        (newPoints() - oldPoints()) >= -200 &&
-        newPoints() >= 0;
-    }
-
-    // Allows any signed-in user to update only reward/attendance fields on user docs.
-    function isAttendanceRewardUpdateBySignedInUser() {
+    // An organizer may change another user's points only together with that user's award
+    // on an event the organizer owns, in the same transaction, by exactly the event's points.
+    function isEventOrganizerAttendanceWrite(userId, beforeData) {
+      let after = request.resource.data;
+      let eventId = after.get('attendanceEventId', '');
+      let eventPath = /databases/$(database)/documents/events/$(eventId);
+      let eventBefore = get(eventPath).data;
+      let eventAfter = getAfter(eventPath).data;
+      let impact = eventPointsOf(eventAfter);
+      let wasAwarded = userId in eventBefore.get('awardedParticipantIds', []);
+      let isAwarded = userId in eventAfter.get('awardedParticipantIds', []);
+      let oldPts = pointsOf(beforeData);
+      let newPts = pointsOf(after);
       return isSignedIn() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'impactPoints',
-          'totalPoints',
-          'rewardPoints',
-          'points',
+        userId != request.auth.uid &&
+        request.auth.uid in ownerIdsOf(eventAfter) &&
+        after.diff(beforeData).affectedKeys().hasOnly(pointFields().concat([
           'participationStatusByEvent',
           'attendanceVerifiedAtByEvent',
+          'attendanceEventId',
           'updatedAt'
-        ]) &&
+        ])) &&
+        after.get('participationStatusByEvent', {})
+          .diff(beforeData.get('participationStatusByEvent', {})).affectedKeys().hasOnly([eventId]) &&
+        after.get('attendanceVerifiedAtByEvent', {})
+          .diff(beforeData.get('attendanceVerifiedAtByEvent', {})).affectedKeys().hasOnly([eventId]) &&
+        (!pointsChangedFrom(beforeData) || arePointFieldsAligned()) &&
         (
-          !pointsFieldChanged() ||
-          (arePointFieldsAligned() && pointDeltaWithinEventRange())
-        );
-    }
-
-    // Allows any signed-in user to create a missing user doc only with attendance/reward fields.
-    function isAttendanceRewardCreateBySignedInUser() {
-      return isSignedIn() &&
-        request.resource.data.keys().hasOnly([
-          'impactPoints',
-          'totalPoints',
-          'rewardPoints',
-          'points',
-          'participationStatusByEvent',
-          'attendanceVerifiedAtByEvent',
-          'updatedAt'
-        ]) &&
-        (
-          !(request.resource.data.impactPoints is int) ||
-          (
-            request.resource.data.totalPoints is int &&
-            request.resource.data.rewardPoints is int &&
-            request.resource.data.points is int &&
-            arePointFieldsAligned() &&
-            request.resource.data.impactPoints >= 0
-          )
+          (wasAwarded == isAwarded && newPts == oldPts) ||
+          (!wasAwarded && isAwarded && newPts == oldPts + impact) ||
+          (wasAwarded && !isAwarded && newPts == (oldPts > impact ? oldPts - impact : 0))
         );
     }
 
     match /users/{userId} {
       // Anyone can read user docs.
       allow read: if true;
-      allow create, update, delete: if isOrganizer();
-      allow create: if isOwner(userId) || isAttendanceRewardCreateBySignedInUser();
-      allow update: if isOwner(userId) || isAttendanceRewardUpdateBySignedInUser();
+
+      // Users start with no points and can only lower their own (leaving an event reverses its points).
+      allow create: if (isOwner(userId) && !request.resource.data.keys().hasAny(pointFields())) ||
+        isEventOrganizerAttendanceWrite(userId, {});
+      allow update: if (
+          isOwner(userId) &&
+          (
+            !pointsChangedFrom(resource.data) ||
+            (arePointFieldsAligned() && pointsOf(request.resource.data) <= pointsOf(resource.data))
+          )
+        ) ||
+        isEventOrganizerAttendanceWrite(userId, resource.data);
       allow delete: if false;
     }
 
     match /user_profiles/{userId} {
       // Anyone can read user_profile docs.
       allow read: if true;
-      allow create, update, delete: if isOrganizer();
-      allow create: if isOwner(userId);
-      allow update: if isOwner(userId);
+      allow create, update: if isOwner(userId);
       allow delete: if false;
     }
 
     match /user_lookup/{userId} {
       // Anyone can read lightweight lookup docs.
       allow read: if true;
-      allow create, update: if isOwner(userId) || isOrganizer();
+      allow create, update: if isOwner(userId);
       allow delete: if false;
     }
 
@@ -232,29 +221,71 @@ service cloud.firestore {
     }
 
     match /events/{eventId} {
+      // Legacy events may store the creator under an older field name.
+      function isEventOwner() {
+        return isSignedIn() && request.auth.uid in ownerIdsOf(resource.data);
+      }
+
+      // Matches the 50-200 range the app enforces.
+      function impactPointsValid() {
+        let p = request.resource.data.get('impactPoints', 0);
+        return p is int && p >= 50 && p <= 200;
+      }
+
+      function changedKeys() {
+        return request.resource.data.diff(resource.data).affectedKeys();
+      }
+
+      function idsBefore(field) {
+        return resource.data.get(field, []).toSet();
+      }
+
+      function idsAfter(field) {
+        return request.resource.data.get(field, []).toSet();
+      }
+
+      // The caller may only remove themselves from this list, never add anyone.
+      function onlySelfRemoved(field) {
+        return idsBefore(field).hasAll(idsAfter(field)) &&
+          idsBefore(field).difference(idsAfter(field)).hasOnly([request.auth.uid]);
+      }
+
       // Anyone can read event docs.
       allow read: if true;
 
-      // Event creation is organizer-only.
-      allow create: if isOrganizer();
+      // Organizers create events as themselves.
+      allow create: if isOrganizer() &&
+        request.resource.data.createdByUid == request.auth.uid &&
+        impactPointsValid();
 
-      // Organizers have full access to event documents.
-      allow update, delete: if isOrganizer();
+      // Volunteers can join/leave only as themselves; leaving also drops their own check-in.
+      allow update: if isSignedIn() &&
+        changedKeys().hasOnly(['participantIds', 'participantsCount', 'checkedInIds', 'awardedParticipantIds', 'updatedAt']) &&
+        idsBefore('participantIds').difference(idsAfter('participantIds'))
+          .union(idsAfter('participantIds').difference(idsBefore('participantIds')))
+          .hasOnly([request.auth.uid]) &&
+        request.resource.data.participantsCount == request.resource.data.participantIds.size() &&
+        onlySelfRemoved('checkedInIds') &&
+        onlySelfRemoved('awardedParticipantIds');
 
-      // Volunteers can join/leave events (update only participantIds, participantsCount, updatedAt).
-      allow update: if isSignedIn() && 
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participantIds', 'participantsCount', 'updatedAt']);
-
-      // Any signed-in user can mark attendance from event date through 2 days after.
-      allow update: if isSignedIn() && 
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkedInIds', 'awardedParticipantIds', 'updatedAt']) &&
+      // Only the event's own organizer can mark attendance, only for joined volunteers
+      // other than themselves, within the window.
+      allow update: if isEventOwner() &&
+        changedKeys().hasOnly(['checkedInIds', 'awardedParticipantIds', 'updatedAt']) &&
+        idsAfter('checkedInIds').difference(idsBefore('participantIds')).size() == 0 &&
+        !idsAfter('checkedInIds').difference(idsBefore('checkedInIds')).hasAny([request.auth.uid]) &&
         eventAttendanceOpen(resource.data);
 
-      // Event owner can fully update/delete their own events.
-      allow update: if isSignedIn() && resource.data.createdByUid == request.auth.uid;
-      allow delete: if isSignedIn() &&
-        (resource.data.createdByUid == request.auth.uid || isOrganizer()) &&
-        eventDeleteOpen(resource.data);
+      // The event's own organizer can edit details, but not attendance, participants or ownership.
+      // Points are frozen once anyone is awarded, so re-checking can't inflate totals.
+      allow update: if isEventOwner() &&
+        !changedKeys().hasAny(['checkedInIds', 'awardedParticipantIds', 'participantIds', 'participantsCount', 'createdByUid']) &&
+        (
+          !changedKeys().hasAny(['impactPoints', 'points', 'rewardPoints']) ||
+          (impactPointsValid() && idsBefore('awardedParticipantIds').size() == 0)
+        );
+
+      allow delete: if isEventOwner() && eventDeleteOpen(resource.data);
 
       match /likes/{userId} {
         // Anyone can read likes.
