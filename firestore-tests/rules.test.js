@@ -24,8 +24,9 @@ beforeEach(async () => {
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
-    await setDoc(doc(db, 'users/orgA'), { role: 'Organizer' });
-    await setDoc(doc(db, 'users/orgB'), { role: 'Organizer' });
+    await setDoc(doc(db, 'users/orgA'), { role: 'Organizer', organizerApproved: true });
+    await setDoc(doc(db, 'users/orgB'), { role: 'Organizer', organizerApproved: true });
+    await setDoc(doc(db, 'users/newOrg'), { role: 'Organizer' });
     await setDoc(doc(db, 'users/vol'), { role: 'Volunteer', impactPoints: 10, totalPoints: 10, rewardPoints: 10, points: 10 });
     await setDoc(doc(db, 'users/vol2'), { role: 'Volunteer' });
     await setDoc(doc(db, 'events/e1'), eventData(Date.now() - HOUR));
@@ -120,6 +121,14 @@ test('volunteer can leave after check-in, reversing their own points', async () 
 test('event points are frozen once someone is awarded', async () => {
   await checkIn(as('orgA'), 'e1', 'vol', 60);
   await assertFails(updateDoc(doc(as('orgA'), 'events/e1'), { impactPoints: 200 }));
+});
+
+test('unapproved organizer cannot create events or approve themselves', async () => {
+  const db = as('newOrg');
+  await assertFails(setDoc(doc(db, 'events/e5'), eventData(Date.now(), { createdByUid: 'newOrg' })));
+  await assertFails(updateDoc(doc(db, 'users/newOrg'), { organizerApproved: true }));
+  await assertFails(setDoc(doc(as('fresh'), 'users/fresh'), { role: 'Organizer', organizerApproved: true }));
+  await assertSucceeds(updateDoc(doc(db, 'users/newOrg'), { name: 'New Org' }));
 });
 
 test('organizer cannot create an event owned by someone else or with out-of-range points', async () => {
