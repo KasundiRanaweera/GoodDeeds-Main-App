@@ -441,8 +441,8 @@ class FirebaseService {
           : int.tryParse(currentPointsRaw?.toString() ?? '') ?? 0;
 
       final userUpdates = <String, dynamic>{
-        'participationStatusByEvent.$eventId': FieldValue.delete(),
-        'attendanceVerifiedAtByEvent.$eventId': FieldValue.delete(),
+        'participationStatusByEvent': {eventId: FieldValue.delete()},
+        'attendanceVerifiedAtByEvent': {eventId: FieldValue.delete()},
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
