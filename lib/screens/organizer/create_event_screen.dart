@@ -548,9 +548,13 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       );
     } catch (e) {
       if (!mounted) return;
+      // The rules deny event creation until the organizer is approved.
+      final message = e is FirebaseException && e.code == 'permission-denied'
+          ? 'Your organizer account is awaiting approval. You can create events once it is approved.'
+          : 'Failed to create event: $e';
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Failed to create event: $e')));
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);

@@ -13,9 +13,12 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(request.auth.uid);
     }
 
+    // Anyone can sign up as an organizer, but only accounts approved in the
+    // Firebase console (organizerApproved: true) can create events.
     function isOrganizer() {
       return isSignedIn() &&
         exists(currentUserPath()) &&
+        get(currentUserPath()).data.get('organizerApproved', false) == true &&
         (
           get(currentUserPath()).data.role == 'Organizer' ||
           get(currentUserPath()).data.isOrganizer == true ||
@@ -135,10 +138,15 @@ service cloud.firestore {
       allow read: if true;
 
       // Users start with no points and can only lower their own (leaving an event reverses its points).
-      allow create: if (isOwner(userId) && !request.resource.data.keys().hasAny(pointFields())) ||
+      // Users can never approve themselves as organizers.
+      allow create: if (
+          isOwner(userId) &&
+          !request.resource.data.keys().hasAny(pointFields().concat(['organizerApproved']))
+        ) ||
         isEventOrganizerAttendanceWrite(userId, {});
       allow update: if (
           isOwner(userId) &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['organizerApproved']) &&
           (
             !pointsChangedFrom(resource.data) ||
             (arePointFieldsAligned() && pointsOf(request.resource.data) <= pointsOf(resource.data))
